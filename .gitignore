@@ -1,0 +1,11 @@
+/ref/
+/.env
+/data/
+/dist/
+/coverage.out
+*.exe
+*.test
+__pycache__/
+/.local/
+/.playwright-mcp/
+.playwright-mcp/
