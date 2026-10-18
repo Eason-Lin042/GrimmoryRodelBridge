@@ -1,0 +1,119 @@
+name: Publish GHCR
+on:
+  create:
+permissions:
+  contents: read
+  packages: write
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+jobs:
+  validate:
+    # The create event also covers branches; only newly created tags may publish.
+    if: github.event.ref_type == 'tag'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/check.yml
+  publish:
+    name: Publish image to GHCR
+    needs: validate
+    if: github.event.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-buildx-action@v4
+      - name: Generate image tags and labels
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          # metadata-action normalizes repository/image names to lowercase.
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          flavor: latest=false
+          tags: |
+            type=ref,event=tag
+            type=sha
+      - name: Build Windows binary
+        env:
+          GOOS: windows
+          GOARCH: amd64
+          CGO_ENABLED: '0'
+        run: |
+          mkdir -p dist
+          go build -trimpath -ldflags='-s -w' -o dist/grimmory-rodel-bridge-windows-amd64.exe ./cmd/adapter
+      # Build each image once; verify and publish these exact local images.
+      - name: Build amd64 image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: grimmory-rodel-bridge:test-amd64
+          labels: ${{ steps.meta.outputs.labels }}
+      - name: Build arm64 image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/arm64
+          load: true
+          push: false
+          tags: grimmory-rodel-bridge:test-arm64
+          labels: ${{ steps.meta.outputs.labels }}
+      - name: Verify containers and collect Linux binaries
+        shell: bash
+        run: |
+          trap 'docker rm -fv grimmory-rodel-bridge-test >/dev/null 2>&1 || true' EXIT
+          for arch in amd64 arm64; do
+            docker run -d --name grimmory-rodel-bridge-test --platform "linux/$arch" \
+              --network none --read-only --cap-drop ALL \
+              --security-opt no-new-privileges --mount type=volume,dst=/data \
+              -e GRIMMORY_URL=http://127.0.0.1:6060 -e PUBLIC_BASE_URL=http://127.0.0.1:8080 \
+              -e ADAPTER_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA= "grimmory-rodel-bridge:test-$arch"
+            ready=false
+            for attempt in $(seq 1 30); do
+              if docker exec grimmory-rodel-bridge-test /adapter --healthcheck; then ready=true; break; fi
+              sleep 1
+            done
+            if [ "$ready" != true ]; then docker logs grimmory-rodel-bridge-test; exit 1; fi
+            docker cp grimmory-rodel-bridge-test:/adapter "dist/grimmory-rodel-bridge-linux-$arch"
+            chmod +x "dist/grimmory-rodel-bridge-linux-$arch"
+            tar -czf "dist/grimmory-rodel-bridge-linux-$arch.tar.gz" -C dist "grimmory-rodel-bridge-linux-$arch"
+            docker rm -fv grimmory-rodel-bridge-test
+          done
+      - name: Upload binaries
+        uses: actions/upload-artifact@v6
+        with:
+          name: grimmory-rodel-bridge-binaries
+          path: |
+            dist/*.tar.gz
+            dist/*.exe
+          if-no-files-found: error
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Push verified images and publish multi-platform tags
+        shell: bash
+        env:
+          IMAGE_TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          image="$REGISTRY/${IMAGE_NAME,,}"
+          sources=()
+          for arch in amd64 arm64; do
+            ref="$image:build-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$arch"
+            docker tag "grimmory-rodel-bridge:test-$arch" "$ref"
+            docker push "$ref"
+            sources+=("$ref")
+          done
+          tags=()
+          while IFS= read -r tag; do
+            if [ -n "$tag" ]; then tags+=(--tag "$tag"); fi
+          done <<< "$IMAGE_TAGS"
+          docker buildx imagetools create "${tags[@]}" "${sources[@]}"

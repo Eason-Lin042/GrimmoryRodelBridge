@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>GrimmoryRodelBridge</title>
+    <link rel="stylesheet" href="/style.css">
+    <script src="/app.js" defer></script>
+</head>
+
+<body>
+    <main>
+        <h1>GrimmoryRodelBridge</h1>
+        <p>Grimmory ↔ Rodel.Reader · EPUB 阅读与章节同步</p>
+        <form id="login">
+            <h2>连接你的 Grimmory 账户</h2><label>用户名<input name="username" autocomplete="username" required
+                    maxlength="256"></label><label>密码<input name="password" type="password"
+                    autocomplete="current-password" required maxlength="4096"></label><button>登录并生成此设备令牌</button>
+        </form>
+        <p id="message" role="status"></p>
+        <section id="token-panel" hidden>
+            <h2>此设备访问令牌</h2>
+            <p>令牌只在本次登录后显示，请复制到小幻。不要分享。</p><code id="token"></code>
+        </section>
+        <section id="account" hidden>
+            <h2 id="username"></h2>
+            <p id="contract"></p>
+            <ol>
+                <li>添加 Reader 源，地址：<code id="reader-url"></code>，访问令牌填上方令牌。</li>
+                <li>添加 OPDS 源，地址：<code id="opds-url"></code>，用户名填自己的用户名，密码填同一令牌。</li>
+                <li>从 OPDS 导入 EPUB；保留 Reader 源用于章节同步。</li>
+            </ol>
+            <p id="download-permission"></p>
+            <p>来源不明的历史进度不会自动迁移。文件升级后旧版停止同步，新版可能生成第二个本地条目；不会自动删除旧书。</p><button id="refresh" type="button">刷新状态</button>
+            <button id="logout" type="button">注销此设备令牌</button>
+            <h2>已准备书籍的同步状态</h2>
+            <p>下表记录最近一次校验结果。小幻可能在同步失败时继续本地阅读；请以这里的状态和错误为准。</p>
+            <div id="books"></div>
+        </section>
+    </main>
+</body>
+
+</html>

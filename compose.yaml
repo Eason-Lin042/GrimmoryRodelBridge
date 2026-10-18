@@ -1,0 +1,28 @@
+services:
+  adapter:
+    image: grimmory-rodel-bridge:local
+    build:
+      context: .
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      GRIMMORY_URL: ${GRIMMORY_URL:?Set GRIMMORY_URL}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?Set PUBLIC_BASE_URL}
+      ADAPTER_ENCRYPTION_KEY: ${ADAPTER_ENCRYPTION_KEY:?Generate an encryption key}
+      LISTEN_ADDR: 0.0.0.0:8080
+      DATA_DIR: /data
+      CACHE_MAX_BYTES: ${CACHE_MAX_BYTES:-2147483648}
+      MAX_EPUB_BYTES: ${MAX_EPUB_BYTES:-268435456}
+      BUILD_CONCURRENCY: ${BUILD_CONCURRENCY:-2}
+    volumes:
+      - adapter-data:/data
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 20s
+
+volumes:
+  adapter-data:
