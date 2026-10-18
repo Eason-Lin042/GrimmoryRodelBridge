@@ -1,36 +1,38 @@
 # GrimmoryRodelBridge
 
-在 [小幻阅读（Rodel.Reader）](https://reader.richasy.net/) 中浏览和下载 [Grimmory](https://grimmory.org/) 的 EPUB，并与 Grimmory Web 同步章节进度。
+**English** | [简体中文](README.zh-CN.md)
 
-书籍继续由 Grimmory 管理。桥接服务通过 OPDS 提供完整 EPUB，通过 Reader API 同步阅读位置，不需要修改两端程序，也不会移动、重命名或覆盖原书。
+Read EPUBs from your [Grimmory](https://grimmory.org/) library in [Rodel.Reader](https://reader.richasy.net/), and sync chapter progress with Grimmory Web.
 
-## 快速上手
+Grimmory continues to manage your books. The bridge serves complete EPUB files through OPDS and syncs reading positions through the Reader API. It requires no changes to either application and does not move, rename, or overwrite your original books.
 
-先克隆项目并进入目录：
+## Quick start
+
+Clone the repository and enter the project directory:
 
 ```bash
 git clone https://github.com/Eason-Lin042/GrimmoryRodelBridge.git
 cd GrimmoryRodelBridge
 ```
 
-### Docker Compose（推荐）
+### Docker Compose (recommended)
 
-1. 准备配置并构建镜像：
+1. Prepare the configuration and build the image:
 
    ```bash
    cp .env.example .env
    docker compose build
    ```
 
-2. 使用刚构建的镜像生成加密密钥，无需在宿主机安装 Go：
+2. Generate an encryption key using the image you just built. Go does not need to be installed on the host:
 
    ```bash
    docker compose run --rm --no-deps adapter --generate-key
    ```
 
-   将输出填入 `.env` 的 `ADAPTER_ENCRYPTION_KEY`。
+   Copy the output into `ADAPTER_ENCRYPTION_KEY` in `.env`.
 
-3. 编辑 `.env`，填写实际地址。以下假设 IP 为 `192.168.1.100`：
+3. Edit `.env` with your actual addresses. This example uses `192.168.1.100`:
 
    ```env
    GRIMMORY_URL=http://192.168.1.100:6060
@@ -38,91 +40,91 @@ cd GrimmoryRodelBridge
    ADAPTER_ENCRYPTION_KEY=your-generated-base64-key
    ```
 
-   `GRIMMORY_URL` 需要从容器内访问，`PUBLIC_BASE_URL` 需要从小幻访问。容器内的 `127.0.0.1` 指向容器自身；只有配置了相应网络和服务别名时，才能使用 `http://grimmory:6060`。
+   `GRIMMORY_URL` must be reachable from the container. `PUBLIC_BASE_URL` must be reachable from Rodel.Reader. Inside a container, `127.0.0.1` refers to that container itself. Use `http://grimmory:6060` only when the container network and service alias are configured accordingly.
 
-4. 启动服务：
+4. Start the service:
 
    ```bash
    docker compose up -d
    ```
 
-默认端口为 `8080`。Compose 使用独立数据卷保存桥接服务的数据，不需要挂载书库或 Grimmory 数据库。对外访问时建议使用 HTTPS。
+The default port is `8080`. Compose uses a separate volume for the bridge's data; there is no need to mount your book library or Grimmory database. Use HTTPS when exposing the service outside your local network.
 
-### 本地运行
+### Run locally
 
-需要 Go **1.27.2 或更新版本**，无需单独安装 SQLite 或 C 编译器。在项目目录中生成密钥：
+Go **1.27.2 or later** is required. No separate SQLite installation or C compiler is needed. Generate a key from the project directory:
 
 ```bash
 go run ./cmd/adapter --generate-key
 ```
 
-设置环境变量后编译并运行，以下以 Bash 为例：
+Set the environment variables, then build and run the service. The following example uses Bash:
 
 ```bash
 export GRIMMORY_URL=http://127.0.0.1:6060
 export PUBLIC_BASE_URL=http://127.0.0.1:8080
-export ADAPTER_ENCRYPTION_KEY='你的Base64密钥'
+export ADAPTER_ENCRYPTION_KEY='your-base64-key'
 export DATA_DIR=./data
 
 go build -o dist/grimmory-rodel-bridge ./cmd/adapter
 ./dist/grimmory-rodel-bridge
 ```
 
-Windows PowerShell 使用 `$env:变量名='值'` 设置相同变量，编译输出文件名使用 `dist/grimmory-rodel-bridge.exe`。本地程序不会自动读取 `.env`。
+In Windows PowerShell, set the same variables using `$env:VARIABLE='value'` and use `dist/grimmory-rodel-bridge.exe` as the build output filename. The local executable does not automatically load `.env`.
 
-## 连接小幻阅读
+## Connect Rodel.Reader
 
-1. **获取设备令牌**：
-   - 浏览器访问本服务的 `PUBLIC_BASE_URL`（如 `http://192.168.1.100:8080`）。
-   - 输入自己的 Grimmory 用户名和密码登录。
-   - 复制页面生成的设备令牌，接下来两个源都使用它。
+1. **Get a device token:**
+   - Open the service's `PUBLIC_BASE_URL` in a browser, for example `http://192.168.1.100:8080`.
+   - Sign in with your Grimmory username and password.
+   - Copy the generated device token. Both sources below use this token.
 
-2. **在小幻阅读中添加 Reader 源（用于进度同步）**：
-   - 打开小幻阅读侧边栏，进入 **开源阅读**，点击 **`+`** 添加源。
-   - **服务器类型**：选择 `Hectorqin Reader`。
-   - **服务器地址**：填入 `PUBLIC_BASE_URL`（**注意：结尾不要追加 `/reader3`**）。
-   - **访问令牌**：填入刚才生成的设备令牌。
+2. **Add a Reader source for progress sync:**
+   - Open the open-source reading section in Rodel.Reader's sidebar and click **+** to add a source.
+   - **Server type:** `Hectorqin Reader`.
+   - **Server address:** `PUBLIC_BASE_URL`, without `/reader3` at the end.
+   - **Access token:** the device token you just generated.
 
-3. **在小幻阅读中添加 OPDS 源（用于书籍浏览与下载）**：
-   - 进入 **OPDS 服务列表**，点击 **`+`** 添加。
-   - **服务器地址**：填入 `PUBLIC_BASE_URL/opds`。
-   - **用户名**：你的 Grimmory 用户名。
-   - **密码**：**同一个设备访问令牌**。
+3. **Add an OPDS source for browsing and downloading books:**
+   - Open the OPDS service list and click **+**.
+   - **Server address:** `PUBLIC_BASE_URL/opds`.
+   - **Username:** your Grimmory username.
+   - **Password:** the same device token.
 
-4. **阅读与同步**：
-   - 从 OPDS 下载并导入 EPUB，再到小幻主书库打开阅读。保留 Reader 源，用于进度同步。
+4. **Read and sync:**
+   - Download and import an EPUB through OPDS, then open it from Rodel.Reader's main library. Keep the Reader source configured for progress sync.
 
-网页登录用 Grimmory 密码，OPDS 的密码填写设备令牌。每台设备分别登录生成令牌；关闭浏览器不会撤销会话，点击“注销此设备令牌”才会使对应令牌失效。
+Use your Grimmory password to sign in to the web page, and the device token as the OPDS password. Generate a separate token for each device. Closing the browser does not revoke the session; selecting "Revoke this device token" does.
 
-## 环境变量说明
+## Configuration
 
-| 环境变量 | 默认值 | 描述 |
+| Environment variable | Default | Description |
 |---|---|---|
-| `GRIMMORY_URL` | 必填 | 桥接服务能够访问的 Grimmory 地址 |
-| `PUBLIC_BASE_URL` | 必填 | 小幻能够访问的固定根地址，不支持子路径部署 |
-| `ADAPTER_ENCRYPTION_KEY` | 必填 | 32 字节密钥的 Base64 字符串，用于加密本地保存的 Grimmory 令牌，请备份 |
-| `LISTEN_ADDR` | `127.0.0.1:8080`（本地）<br>`0.0.0.0:8080`（容器） | HTTP 服务监听地址 |
-| `DATA_DIR` | `./data`（本地）<br>`/data`（容器） | 持久化数据与缓存目录（含 SQLite 数据库） |
-| `CACHE_MAX_BYTES` | `2147483648` (2 GiB) | 源文件与派生文件的最大磁盘缓存配额 |
-| `MAX_EPUB_BYTES` | `268435456` (256 MiB) | 单本 EPUB 允许的最大体积 |
-| `BUILD_CONCURRENCY` | `2` | EPUB 处理请求的并发上限（范围 1–16） |
+| `GRIMMORY_URL` | Required | Grimmory address reachable from the bridge |
+| `PUBLIC_BASE_URL` | Required | Fixed root URL reachable from Rodel.Reader; deployment under a URL subpath is not supported |
+| `ADAPTER_ENCRYPTION_KEY` | Required | Base64-encoded 32-byte key used to encrypt Grimmory tokens stored locally; keep a backup |
+| `LISTEN_ADDR` | `127.0.0.1:8080` locally<br>`0.0.0.0:8080` in the container | HTTP listen address |
+| `DATA_DIR` | `./data` locally<br>`/data` in the container | Persistent data and cache directory, including the SQLite database |
+| `CACHE_MAX_BYTES` | `2147483648` (2 GiB) | Disk cache limit for source and derived files |
+| `MAX_EPUB_BYTES` | `268435456` (256 MiB) | Maximum size of a single EPUB |
+| `BUILD_CONCURRENCY` | `2` | Maximum concurrent EPUB processing requests, from 1 to 16 |
 
-请在导书前确定 `PUBLIC_BASE_URL`。已有数据目录会绑定 Grimmory 地址和对外地址，更换地址后不能直接复用原数据目录。备份时请同时保留数据目录和加密密钥。
+Choose `PUBLIC_BASE_URL` before importing books. The data directory is bound to the Grimmory address and the public address, so it cannot be reused directly after changing those addresses. Back up both the data directory and the encryption key.
 
-## 同步支持与限制
+## Sync support and limitations
 
-- **每本书只能有一份可阅读文件，且必须是主 EPUB。** EPUB＋PDF 等多格式书籍暂不提供 OPDS 条目和进度同步。
-- **首次绑定要求 Grimmory 中没有历史阅读进度。** 已有进度无法确认来源时，会保留原记录并暂停自动恢复和写回。目前不支持历史进度迁移。
-- **同步精度为目录章节级。** 可以区分同一 XHTML 中的不同目录锚点，但不保证恢复到相同字符位置，也不会通过估算的章节进度主动标记读完。
-- **多设备采用最后到达的有效写入。** 允许主动回退，旧设备也可能覆盖新位置。小幻打开书籍时可能自动保存；目前没有后台离线补传队列。
-- **替换 EPUB 后需要重新获取。** 旧副本停止写回，重新导入可能在小幻中形成第二个条目。旧条目和历史进度不会自动迁移或删除。
-- **位置来源或时间不明确时会暂停。** Grimmory v3.5.0 的进度读回为秒级时间，同一秒内的位置变化也可能触发暂停。
+- **Each book must have exactly one readable file, and it must be the primary EPUB.** Books with multiple formats, such as EPUB and PDF, are currently excluded from both the OPDS catalog and progress sync.
+- **The first binding requires no existing reading progress in Grimmory.** When the source of existing progress cannot be established, the original record is preserved and automatic restore and writes are paused. Historical progress migration is not supported yet.
+- **Sync works at table-of-contents chapter level.** Different navigation anchors in the same XHTML file can be distinguished, but restoring the exact character position is not guaranteed. Estimated chapter progress does not mark a book as finished.
+- **The last valid write to arrive wins across devices.** Moving back to an earlier chapter is allowed, and an old device can overwrite a newer position. Rodel.Reader may save automatically when opening a book. There is currently no background queue for offline progress uploads.
+- **After replacing an EPUB, download it again.** The old copy stops writing progress, and importing the new copy may create a second entry in Rodel.Reader. Existing entries and historical progress are not migrated or deleted automatically.
+- **Sync pauses when the progress source or timestamp is unclear.** Grimmory v3.5.0 returns progress timestamps with second precision, so position changes within the same second can also cause a pause.
 
-配置页展示最近一次校验结果、最后一次成功保存时间和暂停原因，可手动刷新查看。暂停状态不会自动解除，目前也没有强制解锁入口。
+The configuration page shows the last validation result, last successful save time, and pause reason. Refresh it manually to check for updates. A paused binding does not resume automatically, and there is currently no option to force it to resume.
 
-接口、位置转换和错误代码详见 [协议与同步契约](docs/protocol.md)。
+See the [protocol and sync contract](docs/protocol.md) (in Chinese) for interfaces, position mapping, and error codes.
 
-## 本地开发与测试
+## Development and testing
 
 ```bash
 go test ./...
@@ -131,8 +133,8 @@ node --test internal/adapter/web_test.mjs
 python -m unittest discover -s dev -p 'test_*.py'
 ```
 
-支持 race detector 的环境可以再运行 `go test -race ./...`。
+Run `go test -race ./...` as well in an environment that supports the race detector.
 
-## 开源许可证
+## License
 
-本项目基于 [MIT 许可证](LICENSE) 发布。欢迎通过 [Issues](https://github.com/Eason-Lin042/GrimmoryRodelBridge/issues) 反馈问题，或提交 Pull Request。
+Released under the [MIT License](LICENSE). Bug reports through [Issues](https://github.com/Eason-Lin042/GrimmoryRodelBridge/issues) and pull requests are welcome.
