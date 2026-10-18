@@ -1,43 +1,74 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="en">
 
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <title>GrimmoryRodelBridge</title>
     <link rel="stylesheet" href="/style.css">
-    <script src="/app.js" defer></script>
+    <script src="/app.js" type="module"></script>
 </head>
 
 <body>
     <main>
-        <h1>GrimmoryRodelBridge</h1>
-        <p>Grimmory ↔ Rodel.Reader · EPUB 阅读与章节同步</p>
+        <header class="page-header">
+            <div>
+                <h1>GrimmoryRodelBridge</h1>
+                <p class="subtitle" data-i18n="tagline">Grimmory ↔ Rodel.Reader · EPUB reading and chapter sync</p>
+            </div>
+            <div class="language-picker" role="group" aria-label="Language" data-i18n-label="languageLabel">
+                <button type="button" data-language="zh-CN" lang="zh-CN" aria-pressed="false">简体中文</button>
+                <button type="button" data-language="en" lang="en" aria-pressed="true">English</button>
+            </div>
+        </header>
+
+        <div id="message" role="status" aria-live="polite" hidden></div>
+
         <form id="login">
-            <h2>连接你的 Grimmory 账户</h2><label>用户名<input name="username" autocomplete="username" required
-                    maxlength="256"></label><label>密码<input name="password" type="password"
-                    autocomplete="current-password" required maxlength="4096"></label><button>登录并生成此设备令牌</button>
+            <h2 data-i18n="loginHeading">Connect your Grimmory account</h2>
+            <p class="muted" data-i18n="loginHelp">Use your Grimmory username and password here. Rodel.Reader will use the device token generated after sign-in.</p>
+            <label for="login-username"><span data-i18n="usernameLabel">Username</span></label>
+            <input id="login-username" name="username" autocomplete="username" required maxlength="256">
+            <label for="login-password"><span data-i18n="passwordLabel">Grimmory password</span></label>
+            <input id="login-password" name="password" type="password" autocomplete="current-password" required maxlength="4096">
+            <button id="login-submit" class="primary" type="submit" data-i18n="loginButton">Sign in and create a device token</button>
         </form>
-        <p id="message" role="status"></p>
-        <section id="token-panel" hidden>
-            <h2>此设备访问令牌</h2>
-            <p>令牌只在本次登录后显示，请复制到小幻。不要分享。</p><code id="token"></code>
+
+        <section id="token-panel" hidden aria-labelledby="token-heading">
+            <h2 id="token-heading" data-i18n="tokenHeading">This device's access token</h2>
+            <p data-i18n="tokenHelp">Copy this token into both Rodel.Reader sources. It is shown only after sign-in. Keep it private.</p>
+            <code id="token" dir="ltr"></code>
+            <p class="muted" data-i18n="tokenPasswordHelp">Use this token as the OPDS password, not your Grimmory account password.</p>
         </section>
-        <section id="account" hidden>
-            <h2 id="username"></h2>
-            <p id="contract"></p>
-            <ol>
-                <li>添加 Reader 源，地址：<code id="reader-url"></code>，访问令牌填上方令牌。</li>
-                <li>添加 OPDS 源，地址：<code id="opds-url"></code>，用户名填自己的用户名，密码填同一令牌。</li>
-                <li>从 OPDS 导入 EPUB；保留 Reader 源用于章节同步。</li>
+
+        <section id="account" hidden aria-labelledby="account-heading">
+            <h2 id="account-heading"><span data-i18n="accountHeading">Connected account</span>: <span id="username"></span></h2>
+            <p id="contract" data-i18n="contract">Sync supports one EPUB per book, the same content version, and normal updates from Grimmory Web and this bridge. Unknown progress sources or content changes pause sync.</p>
+            <ol class="setup-steps">
+                <li>
+                    <strong data-i18n="readerSource">Add a Reader source</strong>
+                    <code id="reader-url" class="source-url" dir="ltr"></code>
+                    <span data-i18n="readerHelp">Set the access token to the device token. Do not append /reader3 to the address.</span>
+                </li>
+                <li>
+                    <strong data-i18n="opdsSource">Add an OPDS source</strong>
+                    <code id="opds-url" class="source-url" dir="ltr"></code>
+                    <span data-i18n="opdsHelp">Use your Grimmory username and the same device token as the password.</span>
+                </li>
+                <li data-i18n="readingHelp">Download the EPUB through OPDS, then open it in Rodel.Reader's main library. Keep the Reader source configured for chapter sync.</li>
             </ol>
             <p id="download-permission"></p>
-            <p>来源不明的历史进度不会自动迁移。文件升级后旧版停止同步，新版可能生成第二个本地条目；不会自动删除旧书。</p><button id="refresh" type="button">刷新状态</button>
-            <button id="logout" type="button">注销此设备令牌</button>
-            <h2>已准备书籍的同步状态</h2>
-            <p>下表记录最近一次校验结果。小幻可能在同步失败时继续本地阅读；请以这里的状态和错误为准。</p>
-            <div id="books"></div>
+            <p class="muted" data-i18n="versionHelp">Existing progress with an unknown source is not migrated automatically. After a content update, the old copy stops syncing and a new import may create a second local entry. Existing books are not deleted automatically.</p>
+            <div class="actions">
+                <button id="refresh" type="button" data-i18n="refreshButton">Refresh status</button>
+                <button id="logout" type="button" data-i18n="logoutButton">Revoke this device token</button>
+            </div>
+
+            <h2 data-i18n="booksHeading">Sync status for prepared books</h2>
+            <p class="muted" data-i18n="statusHelp">These are the last validation results, not continuous monitoring. Rodel.Reader may keep reading locally when sync fails; check the status and reason here.</p>
+            <div id="books" aria-live="polite"></div>
         </section>
+        <noscript><p lang="en">Enable JavaScript to sign in and view sync status.</p><p lang="zh-CN">请启用 JavaScript，以便登录和查看同步状态。</p></noscript>
     </main>
 </body>
 

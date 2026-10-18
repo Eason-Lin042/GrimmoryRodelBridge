@@ -82,6 +82,7 @@ func (a *Server) Handler() http.Handler {
 	})
 	mux.HandleFunc("GET /{$}", a.webFile)
 	mux.HandleFunc("GET /app.js", a.webFile)
+	mux.HandleFunc("GET /i18n.mjs", a.webFile)
 	mux.HandleFunc("GET /style.css", a.webFile)
 	mux.HandleFunc("GET /api/status", a.status)
 	mux.HandleFunc("/reader3/", a.reader)
@@ -650,7 +651,7 @@ func (a *Server) webFile(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	kind := map[string]string{"index.html": "text/html; charset=utf-8", "app.js": "text/javascript; charset=utf-8", "style.css": "text/css; charset=utf-8"}[name]
+	kind := map[string]string{"index.html": "text/html; charset=utf-8", "app.js": "text/javascript; charset=utf-8", "i18n.mjs": "text/javascript; charset=utf-8", "style.css": "text/css; charset=utf-8"}[name]
 	w.Header().Set("Content-Type", kind)
 	w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'")
 	w.Write(data)

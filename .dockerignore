@@ -6,4 +6,5 @@
 !internal/
 !internal/**
 **/*_test.go
+**/*_test.mjs
 internal/testfixture/

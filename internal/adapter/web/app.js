@@ -1,18 +1,188 @@
-"use strict";
+import { errorMessage, formatTime, languageStorageKey, selectLocale, states, translate } from "./i18n.mjs";
+
 const $ = id => document.getElementById(id);
-const labels = {new:"等待首次保存",bound:"已绑定",paused:"同步暂停",pending:"等待写回确认"};
-const reasons = {HISTORICAL_PROGRESS_UNBOUND:"已有历史进度，来源尚未绑定",EPUB_VERSION_CHANGED:"EPUB 版本变化，请重新获取；旧进度不会自动迁移",PROGRESS_SOURCE_UNKNOWN:"无法确认进度来源",UPSTREAM_PROGRESS_RESET:"检测到上游重置",PROGRESS_TIME_UNKNOWN:"没有可归属的位置时间",PROGRESS_TIME_AMBIGUOUS:"位置时间不明确",UPSTREAM_WRITE_UNCONFIRMED:"写入结果未确认，已暂停",WRITE_READBACK_MISMATCH:"写入读回不一致",INCOMPLETE_BINDING_WRITE:"上次写入未完成确认",BOOK_FILES_CHANGED:"书籍文件结构已变化"};
-async function status() {
-  const r=await fetch("/api/status",{cache:"no-store"});
-  if(!r.ok){$("account").hidden=true;$("login").hidden=false;return;}
-  const d=await r.json();$("account").hidden=false;$("login").hidden=true;
-  $("username").textContent=d.username;$("contract").textContent=d.contract;
-  $("reader-url").textContent=d.readerURL;$("opds-url").textContent=d.opdsURL;
-  $("download-permission").textContent=d.canDownload?"当前账户可获取 EPUB。":"当前账户没有下载权限；已有授权书籍仍可同步。";
-  $("books").replaceChildren();
-  for(const b of d.books){const p=document.createElement("p");p.textContent=`Book ${b.bookId} · ${labels[b.state]||b.state} · ${reasons[b.code]||b.code||"无错误"} · 最近成功：${b.lastSuccess?new Date(b.lastSuccess).toLocaleString():"尚无"}`;$("books").append(p);}
+let savedLanguage;
+try { savedLanguage = localStorage.getItem(languageStorageKey); } catch { /* Storage may be disabled. */ }
+let language = selectLocale(savedLanguage, navigator.languages || [navigator.language]);
+const ui = { account: null, token: "", notice: null, busy: null };
+const t = (key, values) => translate(key, language, values);
+
+function clearSession() {
+    ui.account = null;
+    ui.token = "";
 }
-$("login").addEventListener("submit",async e=>{e.preventDefault();$("message").textContent="正在连接…";const form=new FormData(e.target);try{const r=await fetch("/reader3/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({username:form.get("username"),password:form.get("password"),isLogin:true})});const d=await r.json();e.target.elements.password.value="";if(!r.ok||!d.isSuccess)throw new Error(d.errorMsg||"登录失败");$("token").textContent=d.data.accessToken;$("token-panel").hidden=false;$("message").textContent="已生成此设备令牌。";await status();}catch(e){$("message").textContent=e.message;}});
-$("refresh").onclick=()=>status().catch(()=>{$("message").textContent="状态获取失败，请稍后重试。";});
-$("logout").onclick=async()=>{const r=await fetch("/reader3/logout",{method:"POST"});if(r.ok){$("token").textContent="";$("token-panel").hidden=true;$("message").textContent="此设备令牌已撤销。";await status();}else{$("message").textContent="注销失败，请重试。";}};
-status().catch(()=>{$("message").textContent="暂时无法连接服务。";});
+
+function appendErrorCode(parent, code) {
+    if (!code) return;
+    const line = document.createElement("p");
+    line.className = "error-code muted";
+    const value = document.createElement("code");
+    value.textContent = code;
+    line.append(`${t("errorCode")}: `, value);
+    parent.append(line);
+}
+
+function renderBooks() {
+    $("books").replaceChildren();
+    const books = ui.account.books || [];
+    if (!books.length) {
+        const empty = document.createElement("p");
+        empty.className = "empty-state muted";
+        empty.textContent = t("emptyBooks");
+        $("books").append(empty);
+    }
+    for (const book of books) {
+        const item = document.createElement("article");
+        item.className = "book-status";
+        const heading = document.createElement("h3");
+        heading.textContent = t("bookHeading", { id: book.bookId });
+        const state = document.createElement("span");
+        state.className = "state";
+        state.dataset.state = states[book.state] ? book.state : "unknown";
+        state.textContent = t(states[book.state] || "stateUnknown");
+        const reason = document.createElement("p");
+        reason.textContent = book.code ? errorMessage(book.code, language) : t("noErrors");
+        const last = document.createElement("p");
+        last.className = "muted last-success";
+        last.textContent = t("lastSuccess", { time: formatTime(book.lastSuccess, language) });
+        item.append(heading, state, reason, last);
+        appendErrorCode(item, book.code);
+        $("books").append(item);
+    }
+}
+
+function render() {
+    document.documentElement.lang = language;
+    for (const element of document.querySelectorAll("[data-i18n]")) element.textContent = t(element.dataset.i18n);
+    for (const element of document.querySelectorAll("[data-i18n-label]")) element.setAttribute("aria-label", t(element.dataset.i18nLabel));
+    for (const button of document.querySelectorAll("[data-language]")) button.setAttribute("aria-pressed", String(button.dataset.language === language));
+    for (const input of $("login").querySelectorAll("input")) {
+        if (input.validity.customError) input.setCustomValidity(t(`${input.name}Required`));
+    }
+    $("login").hidden = !!ui.account;
+    $("account").hidden = !ui.account;
+    $("token-panel").hidden = !ui.token;
+    $("token").textContent = ui.token;
+    $("login-submit").disabled = !!ui.busy;
+    $("refresh").disabled = !!ui.busy;
+    $("logout").disabled = !!ui.busy;
+    $("login").setAttribute("aria-busy", String(ui.busy === "login"));
+    $("account").setAttribute("aria-busy", String(ui.busy === "refresh" || ui.busy === "logout"));
+    if (ui.busy === "login") $("login-submit").textContent = t("signingIn");
+    if (ui.busy === "refresh") $("refresh").textContent = t("refreshing");
+    if (ui.busy === "logout") $("logout").textContent = t("revoking");
+    $("message").replaceChildren();
+    $("message").hidden = !ui.notice;
+    if (ui.notice) {
+        const text = document.createElement("span");
+        text.textContent = t(ui.notice.key, { reason: errorMessage(ui.notice.code, language, ui.notice.context) });
+        $("message").append(text);
+        appendErrorCode($("message"), ui.notice.code);
+    }
+    if (ui.account) {
+        $("username").textContent = ui.account.username;
+        $("reader-url").textContent = ui.account.readerURL;
+        $("opds-url").textContent = ui.account.opdsURL;
+        $("download-permission").textContent = t(ui.account.canDownload ? "downloadAllowed" : "downloadDenied");
+        renderBooks();
+    }
+}
+
+function responseCode(body, response) {
+    // Never display arbitrary upstream response text as an error message.
+    const value = body?.errorMsg || body?.error;
+    return typeof value === "string" && /^[A-Z][A-Z0-9_]{0,79}$/.test(value) ? value : `HTTP_${response.status}`;
+}
+
+async function responseBody(response) {
+    try { return await response.json(); } catch { throw new Error("UPSTREAM_OR_STORAGE_UNAVAILABLE"); }
+}
+
+function showFailure(key, error, context) {
+    const code = /^[A-Z][A-Z0-9_]{0,79}$/.test(error.message) ? error.message : null;
+    ui.notice = code ? { key, code, context } : { key: "connectionFailed" };
+}
+
+async function refreshStatus(initial = false) {
+    const response = await fetch("/api/status", { cache: "no-store" });
+    if (response.status === 401) {
+        clearSession();
+        if (!initial) ui.notice = { key: "sessionExpired" };
+        render();
+        return;
+    }
+    const data = await responseBody(response);
+    if (!response.ok) throw new Error(responseCode(data, response));
+    ui.account = data;
+    render();
+}
+
+for (const button of document.querySelectorAll("[data-language]")) {
+    button.addEventListener("click", () => {
+        language = button.dataset.language;
+        try { localStorage.setItem(languageStorageKey, language); } catch { /* Switching still works without storage. */ }
+        render();
+    });
+}
+
+for (const input of $("login").querySelectorAll("input")) {
+    input.addEventListener("invalid", () => input.setCustomValidity(t(`${input.name}Required`)));
+    input.addEventListener("input", () => input.setCustomValidity(""));
+}
+
+$("login").addEventListener("submit", async event => {
+    event.preventDefault();
+    ui.busy = "login";
+    ui.notice = null;
+    render();
+    const form = new FormData(event.target);
+    try {
+        const response = await fetch("/reader3/login", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ username: form.get("username"), password: form.get("password"), isLogin: true }),
+        });
+        const data = await responseBody(response);
+        if (!response.ok || !data.isSuccess) throw new Error(responseCode(data, response));
+        ui.token = data.data.accessToken;
+        ui.notice = { key: "tokenCreated" };
+        // Status failures must not be misreported as a rejected login.
+        try { await refreshStatus(); } catch (error) { showFailure("statusFailed", error); }
+    } catch (error) {
+        showFailure("loginFailed", error, "login");
+    } finally {
+        event.target.elements.password.value = "";
+        ui.busy = null;
+        render();
+    }
+});
+
+$("refresh").addEventListener("click", async () => {
+    ui.busy = "refresh";
+    ui.notice = null;
+    render();
+    try { await refreshStatus(); } catch (error) { showFailure("statusFailed", error); }
+    finally { ui.busy = null; render(); }
+});
+
+$("logout").addEventListener("click", async () => {
+    ui.busy = "logout";
+    ui.notice = null;
+    render();
+    try {
+        const response = await fetch("/reader3/logout", { method: "POST" });
+        if (response.status === 401) {
+            clearSession();
+            ui.notice = { key: "sessionExpired" };
+        } else {
+            const data = await responseBody(response);
+            if (!response.ok || !data.isSuccess) throw new Error(responseCode(data, response));
+            clearSession();
+            ui.notice = { key: "loggedOut" };
+        }
+    } catch (error) { showFailure("logoutFailed", error); }
+    finally { ui.busy = null; render(); }
+});
+
+render();
+refreshStatus(true).catch(error => { showFailure("statusFailed", error); render(); });

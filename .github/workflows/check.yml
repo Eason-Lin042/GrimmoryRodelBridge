@@ -33,5 +33,6 @@ jobs:
           go vet ./...
           python -m unittest discover -s dev -p 'test_*.py'
           node --check internal/adapter/web/app.js
+          node --test internal/adapter/web_test.mjs
       - name: Go tests
         run: go test ${{ matrix.test_flags }} ./...

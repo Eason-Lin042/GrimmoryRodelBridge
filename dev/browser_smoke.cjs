@@ -9,7 +9,7 @@ const data = path.join(__dirname, "../.local/grimmory");
 async function main() {
   const account = JSON.parse(fs.readFileSync(path.join(data, "client-test.json"), "utf8"));
   const browser = await chromium.launch({ channel: "chrome", headless: true });
-  const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  const context = await browser.newContext({ locale: "zh-CN", viewport: { width: 1280, height: 900 } });
   const page = await context.newPage();
   try {
     // Complete the official password-change flow for this generated test account,

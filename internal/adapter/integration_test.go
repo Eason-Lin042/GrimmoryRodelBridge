@@ -250,6 +250,25 @@ func assertCode(t *testing.T, rr *httptest.ResponseRecorder, code int) {
 }
 func number(v float64) *float64 { return &v }
 
+func TestBilingualUIAssets(t *testing.T) {
+	r := newRig(t)
+	for _, path := range []string{"/app.js", "/i18n.mjs"} {
+		response := r.request("GET", path, "", nil, nil)
+		assertCode(t, response, 200)
+		if !strings.HasPrefix(response.Header().Get("Content-Type"), "text/javascript") {
+			t.Fatalf("module %s was not served as JavaScript", path)
+		}
+	}
+	page := r.request("GET", "/", "", nil, nil)
+	assertCode(t, page, 200)
+	if !strings.Contains(page.Body.String(), `data-language="zh-CN"`) || !strings.Contains(page.Body.String(), `type="module"`) {
+		t.Fatal("page is missing its language controls or module entry point")
+	}
+	if !strings.Contains(page.Header().Get("Content-Security-Policy"), "script-src 'self'") {
+		t.Fatal("language support weakened the script policy")
+	}
+}
+
 func TestEndToEndProgressPermissionsAndRange(t *testing.T) {
 	r := newRig(t)
 	alice := r.login(t, "alice")
