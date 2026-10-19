@@ -33,7 +33,7 @@ jobs:
         with:
           # metadata-action normalizes repository/image names to lowercase.
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          flavor: latest=false
+          flavor: latest=true
           tags: |
             type=ref,event=tag
             type=sha
