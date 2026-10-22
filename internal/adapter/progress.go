@@ -127,9 +127,11 @@ func (a *Server) pause(ctx context.Context, binding store.Binding, code string) 
 	return fail(code, 409)
 }
 
-// eligibility is a restricted operational contract, not file-level provenance
-// supplied by Grimmory. A pause persists; it never silently reenrolls a reset book.
-func (a *Server) eligibility(ctx context.Context, s store.Session, b grimmory.Book, entry *cached) (store.Binding, *int, error) {
+// eligibility adopts valid existing progress under the single-EPUB contract;
+// Grimmory does not supply file-level provenance. Only the obsolete historical
+// pause can recover automatically, never a reset or a previously used binding.
+// History is adopted on reads, so the first save cannot overwrite it unseen.
+func (a *Server) eligibility(ctx context.Context, s store.Session, b grimmory.Book, entry *cached, adoptHistory bool) (store.Binding, *int, error) {
 	f, e := b.UniqueEPUB()
 	if e != nil {
 		return store.Binding{}, nil, fail("UNSUPPORTED_BOOK_FILES", 409)
@@ -144,6 +146,10 @@ func (a *Server) eligibility(ctx context.Context, s store.Session, b grimmory.Bo
 	if exists && (bound.FileID != f.ID || bound.Revision != entry.Book.Revision) {
 		return bound, nil, a.pause(ctx, bound, "EPUB_VERSION_CHANGED")
 	}
+	legacyHistory := bound.State == "paused" && bound.Code == "HISTORICAL_PROGRESS_UNBOUND" && bound.PositionHash == "" && bound.PositionTime == 0 && bound.LastSuccess == 0
+	if legacyHistory {
+		bound.State, bound.Code = "new", ""
+	}
 	if bound.State == "paused" {
 		return bound, nil, fail(bound.Code, 409)
 	}
@@ -153,22 +159,31 @@ func (a *Server) eligibility(ctx context.Context, s store.Session, b grimmory.Bo
 	if bound.State == "pending" {
 		return bound, nil, a.pause(ctx, bound, "INCOMPLETE_BINDING_WRITE")
 	}
-	if bound.State == "new" {
-		if !b.NoHistory() {
-			return bound, nil, a.pause(ctx, bound, "HISTORICAL_PROGRESS_UNBOUND")
-		}
+	if bound.State == "new" && b.NoHistory() && !legacyHistory {
 		if e = a.DB.SaveBinding(ctx, bound); e != nil {
 			return bound, nil, e
 		}
 		return bound, nil, nil
 	}
 	if b.EPUB == nil {
+		if bound.State == "new" {
+			return bound, nil, a.pause(ctx, bound, "PROGRESS_SOURCE_UNKNOWN")
+		}
 		return bound, nil, a.pause(ctx, bound, "UPSTREAM_PROGRESS_RESET")
 	}
 	index, e := progressChapter(b.EPUB, entry.Book)
 	if e != nil {
 		code, _ := publicError(e)
 		return bound, nil, a.pause(ctx, bound, code)
+	}
+	if bound.State == "new" {
+		if b.LastRead == nil || b.LastRead.UnixMilli() <= 0 {
+			return bound, nil, a.pause(ctx, bound, "PROGRESS_TIME_UNKNOWN")
+		}
+		if !adoptHistory {
+			return bound, nil, fail("UPSTREAM_PROGRESS_AVAILABLE", 409)
+		}
+		bound.State, bound.Code = "bound", ""
 	}
 	hash := positionHash(b.EPUB)
 	if hash != bound.PositionHash {
@@ -243,7 +258,7 @@ func (a *Server) saveProgress(ctx context.Context, s store.Session, raw string, 
 		a.DB.Invalidate(ctx, id, "BOOK_FILES_CHANGED")
 		return fail("BOOK_FILES_CHANGED", 409)
 	}
-	bound, _, e := a.eligibility(ctx, s, b, entry)
+	bound, _, e := a.eligibility(ctx, s, b, entry, false)
 	if e != nil {
 		return e
 	}

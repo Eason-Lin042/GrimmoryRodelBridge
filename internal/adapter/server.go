@@ -345,7 +345,7 @@ func (a *Server) reader(w http.ResponseWriter, r *http.Request) {
 		a.error(w, r, fail("EPUB_VERSION_MISMATCH", 409), true)
 		return
 	}
-	bound, index, e := a.eligibility(r.Context(), s, b, entry)
+	bound, index, e := a.eligibility(r.Context(), s, b, entry, true)
 	if e != nil {
 		a.error(w, r, e, true)
 		return
@@ -427,7 +427,7 @@ func (a *Server) shelfItem(ctx context.Context, s store.Session, id int64) (resu
 		return nil, e
 	}
 	defer a.cache.release(entry)
-	bound, index, e := a.eligibility(ctx, s, b, entry)
+	bound, index, e := a.eligibility(ctx, s, b, entry, true)
 	if e != nil {
 		return nil, e
 	}
@@ -496,8 +496,8 @@ func (a *Server) download(w http.ResponseWriter, r *http.Request) {
 		a.error(w, r, fail("BOOK_FILES_CHANGED", 409), false)
 		return
 	}
-	// Preparing a book records its synchronization state without granting a binding.
-	_, _, e = a.eligibility(r.Context(), s, fresh, entry)
+	// Preparing a book may adopt existing progress, without writing it upstream.
+	_, _, e = a.eligibility(r.Context(), s, fresh, entry, true)
 	if e != nil {
 		code, status := publicError(e)
 		if status >= 500 {
@@ -672,7 +672,7 @@ func (a *Server) status(w http.ResponseWriter, r *http.Request) {
 		a.error(w, r, e, false)
 		return
 	}
-	writeJSON(w, 200, map[string]any{"username": u.Username, "canDownload": u.Permissions.Admin || u.Permissions.Download, "readerURL": a.Config.PublicURL, "opdsURL": a.Config.PublicURL + "/opds", "books": bindings, "contract": "唯一 EPUB、同一内容版本，仅支持 Grimmory Web 和 Adapter 的正常进度更新；来源不明或版本变化时暂停。"})
+	writeJSON(w, 200, map[string]any{"username": u.Username, "canDownload": u.Permissions.Admin || u.Permissions.Download, "readerURL": a.Config.PublicURL, "opdsURL": a.Config.PublicURL + "/opds", "books": bindings, "contract": "唯一主 EPUB、同一内容版本，自动采用有效的已有进度，仅支持 Grimmory Web 和 Adapter 的正常进度更新；位置无效、时间不明或版本变化时暂停。"})
 }
 
 // Exported only for a CLI readiness probe; credentials are never part of its URL.

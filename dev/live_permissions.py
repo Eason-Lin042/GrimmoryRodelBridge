@@ -1,8 +1,9 @@
-"""Real, loopback-only permission and historical-source checks after live_smoke.py."""
+"""Real, loopback-only permission and existing-progress checks after live_smoke.py."""
 import base64
 import json
 import secrets
 import urllib.parse
+from datetime import datetime
 
 from live_smoke import ADAPTER, DATA, UPSTREAM, request
 
@@ -93,15 +94,20 @@ def main():
     _, historical_jwt, _, historical_token = create_user("adapter_history_")
     request(UPSTREAM, "/api/v1/books/progress", dict(bookId=book_id, fileProgress=dict(
         bookFileId=file_id, positionHref="EPUB/Text/a.xhtml#c1", progressPercent=33.3)), token=historical_jwt)
-    before = request(UPSTREAM, book_path, token=historical_jwt)[1]["epubProgress"]
+    before = request(UPSTREAM, book_path, token=historical_jwt)[1]
+    save_path = "/reader3/saveBookProgress?accessToken=" + historical_token
+    expect_http(409, lambda: request(ADAPTER, save_path, dict(url=result["syncURL"], index=0)))
     acquired = request(ADAPTER, f"/books/{book_id}/epub", token=historical_token)
-    assert acquired[2]["X-Adapter-Sync-Status"] == "HISTORICAL_PROGRESS_UNBOUND"
+    assert not acquired[2].get("X-Adapter-Sync-Status")
     path = "/reader3/getShelfBook?accessToken=" + historical_token + "&url=" + urllib.parse.quote(result["syncURL"], safe="")
-    expect_http(409, lambda: request(ADAPTER, path))
-    expect_http(409, lambda: request(ADAPTER, "/reader3/saveBookProgress?accessToken=" + historical_token,
-                                  dict(url=result["syncURL"], index=0)))
-    assert request(UPSTREAM, book_path, token=historical_jwt)[1]["epubProgress"] == before
-    print("Real library revocation, forged File ID and unbound historical progress protection: passed", flush=True)
+    restored = request(ADAPTER, path)[1]["data"]
+    expected_time = int(datetime.fromisoformat(before["lastReadTime"].replace("Z", "+00:00")).timestamp() * 1000)
+    assert restored["durChapterIndex"] == 1 and restored["durChapterTime"] == expected_time
+    after = request(UPSTREAM, book_path, token=historical_jwt)[1]
+    assert after["epubProgress"] == before["epubProgress"] and after["lastReadTime"] == before["lastReadTime"]
+    assert request(ADAPTER, save_path, dict(url=result["syncURL"], index=0))[1]["isSuccess"]
+    assert request(ADAPTER, path)[1]["data"]["durChapterIndex"] == 0
+    print("Real library revocation, forged File ID, read-only progress adoption and subsequent save: passed", flush=True)
     print("Local-only client test credentials:", DATA / "client-test.json", flush=True)
 
 

@@ -18,6 +18,7 @@ import (
 
 	"grimmoryrodelbridge/internal/config"
 	"grimmoryrodelbridge/internal/grimmory"
+	"grimmoryrodelbridge/internal/store"
 	"grimmoryrodelbridge/internal/testfixture"
 )
 
@@ -25,6 +26,7 @@ type mockUser struct {
 	name                  string
 	download, admin, opds bool
 	progress              *grimmory.Progress
+	pdf                   json.RawMessage
 	last                  *time.Time
 	blocked               bool
 }
@@ -53,7 +55,7 @@ func (m *mockGrimmory) tokens(user int64) grimmory.Tokens {
 }
 func (m *mockGrimmory) book(id int64) grimmory.Book {
 	u := m.users[id]
-	b := grimmory.Book{ID: 42, Title: "Synthetic", Primary: &grimmory.File{ID: 901, BookID: 42, Type: "EPUB", IsBook: true}, Metadata: grimmory.Metadata{Title: "Synthetic", Authors: []string{"Author"}}, EPUB: u.progress, LastRead: u.last}
+	b := grimmory.Book{ID: 42, Title: "Synthetic", Primary: &grimmory.File{ID: 901, BookID: 42, Type: "EPUB", IsBook: true}, Metadata: grimmory.Metadata{Title: "Synthetic", Authors: []string{"Author"}}, EPUB: u.progress, PDF: u.pdf, LastRead: u.last}
 	if m.extra {
 		b.Alternatives = []grimmory.File{{ID: 902, BookID: 42, Type: "PDF", IsBook: true}}
 	}
@@ -351,26 +353,209 @@ func TestEndToEndProgressPermissionsAndRange(t *testing.T) {
 	}
 }
 
-func TestHistoricalUnknownAndVersionChangesNeverWrite(t *testing.T) {
-	t.Run("historical", func(t *testing.T) {
-		r := newRig(t)
-		token := r.login(t, "alice")
-		r.m.mu.Lock()
-		r.m.users[1].progress = &grimmory.Progress{Href: "OPS/Text/a.xhtml#two", Percent: number(40)}
-		stamp := time.Now()
-		r.m.users[1].last = &stamp
-		r.m.mu.Unlock()
-		identity, download := r.acquire(t, token)
-		if download.Header().Get("X-Adapter-Sync-Status") != "HISTORICAL_PROGRESS_UNBOUND" {
-			t.Fatal("historical position not quarantined")
-		}
-		assertCode(t, r.save(token, identity, 0), 409)
-		r.m.mu.Lock()
-		defer r.m.mu.Unlock()
-		if len(r.m.writes) != 0 || *r.m.users[1].progress.Percent != 40 {
-			t.Fatal("historical progress overwritten")
-		}
-	})
+func assertReaderProgress(t *testing.T, response *httptest.ResponseRecorder, index int, stamp time.Time) {
+	t.Helper()
+	assertCode(t, response, 200)
+	var result struct{ Data map[string]any }
+	if e := json.Unmarshal(response.Body.Bytes(), &result); e != nil {
+		t.Fatal(e)
+	}
+	if result.Data["durChapterIndex"] != float64(index) || result.Data["durChapterTime"] != float64(stamp.UnixMilli()) {
+		t.Fatal("incorrect cloud position or time", response.Body.String())
+	}
+}
+
+func TestAdoptsExistingGrimmoryProgress(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		progress *grimmory.Progress
+	}{
+		{"href", &grimmory.Progress{Href: "OPS/Text/a.xhtml#two", Percent: number(40)}},
+		{"cfi", &grimmory.Progress{CFI: "epubcfi(/6/2[ref-a]!/4/4/4/1:4)", Href: "OPS/Text/a.xhtml#two", Percent: number(44.5)}},
+		{"percentage", &grimmory.Progress{Percent: number(40)}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newRig(t)
+			token := r.login(t, "alice")
+			stamp := time.Date(2025, 6, 2, 3, 4, 5, 0, time.UTC)
+			r.m.users[1].progress, r.m.users[1].last = tc.progress, &stamp
+			before := positionHash(tc.progress)
+			identity, download := r.acquire(t, token)
+			if code := download.Header().Get("X-Adapter-Sync-Status"); code != "" {
+				t.Fatal("valid existing progress was rejected", code)
+			}
+			path := "/reader3/getShelfBook?url=" + url.QueryEscape(identity)
+			assertReaderProgress(t, r.request("GET", path, token, nil, nil), 1, stamp)
+			shelf := r.request("GET", "/reader3/getBookshelf", token, nil, nil)
+			assertCode(t, shelf, 200)
+			var listed struct{ Data []map[string]any }
+			if e := json.Unmarshal(shelf.Body.Bytes(), &listed); e != nil || len(listed.Data) != 1 || listed.Data[0]["durChapterIndex"] != float64(1) || listed.Data[0]["durChapterTime"] != float64(stamp.UnixMilli()) {
+				t.Fatal("adopted book missing from shelf", shelf.Body.String(), e)
+			}
+			bound, exists, e := r.a.DB.Binding(context.Background(), 1, 42)
+			if e != nil || !exists || bound.State != "bound" || bound.Code != "" || bound.FileID != 901 || bound.PositionHash != before || bound.PositionTime != stamp.UnixMilli() || bound.LastSuccess != 0 {
+				t.Fatalf("incorrect adopted binding: %+v %v", bound, e)
+			}
+			if len(r.m.writes) != 0 || positionHash(r.m.users[1].progress) != before || !r.m.users[1].last.Equal(stamp) {
+				t.Fatal("adoption changed the upstream record")
+			}
+			if e = r.a.Close(); e != nil {
+				t.Fatal(e)
+			}
+			r.a, e = New(r.cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+			if e != nil {
+				t.Fatal(e)
+			}
+			assertReaderProgress(t, r.request("GET", path, token, nil, nil), 1, stamp)
+			stamp = stamp.Add(time.Minute)
+			r.m.users[1].progress = &grimmory.Progress{Href: "OPS/Text/b.xhtml#three", Percent: number(75)}
+			assertReaderProgress(t, r.request("GET", path, token, nil, nil), 2, stamp)
+			assertCode(t, r.save(token, identity, 0), 200)
+			if len(r.m.writes) != 1 || r.m.writes[0].File.FileID != 901 || r.m.writes[0].File.Href != "OPS/Text/a.xhtml#one" {
+				t.Fatal("adopted binding did not support a backward save")
+			}
+		})
+	}
+}
+
+func TestFirstSaveCannotOverwriteUnadoptedProgress(t *testing.T) {
+	for _, state := range []string{"absent", "new", "legacy"} {
+		t.Run(state, func(t *testing.T) {
+			r := newRig(t)
+			token := r.login(t, "alice")
+			identity, _ := r.acquire(t, token)
+			userID := int64(1)
+			if state == "absent" {
+				token, userID = r.login(t, "bob"), 2
+			} else if state == "legacy" {
+				bound, _, _ := r.a.DB.Binding(context.Background(), userID, 42)
+				bound.State, bound.Code = "paused", "HISTORICAL_PROGRESS_UNBOUND"
+				if e := r.a.DB.SaveBinding(context.Background(), bound); e != nil {
+					t.Fatal(e)
+				}
+			}
+			stamp := r.m.clock
+			r.m.users[userID].progress = &grimmory.Progress{Href: "OPS/Text/a.xhtml#two", Percent: number(40)}
+			r.m.users[userID].last = &stamp
+			before := positionHash(r.m.users[userID].progress)
+			for i := 0; i < 2; i++ {
+				response := r.save(token, identity, 0)
+				assertCode(t, response, 409)
+				if !strings.Contains(response.Body.String(), "UPSTREAM_PROGRESS_AVAILABLE") {
+					t.Fatal(response.Body.String())
+				}
+			}
+			bound, _, e := r.a.DB.Binding(context.Background(), userID, 42)
+			if e != nil || bound.State == "bound" || len(r.m.writes) != 0 || positionHash(r.m.users[userID].progress) != before || !r.m.users[userID].last.Equal(stamp) {
+				t.Fatalf("save adopted or overwrote unseen history: %+v %v", bound, e)
+			}
+			path := "/reader3/getShelfBook?url=" + url.QueryEscape(identity)
+			assertReaderProgress(t, r.request("GET", path, token, nil, nil), 1, stamp)
+			assertCode(t, r.save(token, identity, 0), 200)
+			if len(r.m.writes) != 1 {
+				t.Fatal("save remained blocked after reading the upstream position")
+			}
+		})
+	}
+}
+
+func TestUnboundProgressMustBeValid(t *testing.T) {
+	stamp := time.Date(2025, 6, 2, 3, 4, 5, 0, time.UTC)
+	epoch := time.Unix(0, 0)
+	valid := &grimmory.Progress{Href: "OPS/Text/a.xhtml#two", Percent: number(40)}
+	for _, tc := range []struct {
+		name, code string
+		progress   *grimmory.Progress
+		time       *time.Time
+		pdf        json.RawMessage
+	}{
+		{name: "missing-position", code: "PROGRESS_SOURCE_UNKNOWN", time: &stamp},
+		{name: "empty-position", code: "PROGRESS_SOURCE_UNKNOWN", progress: &grimmory.Progress{}, time: &stamp},
+		{name: "missing-time", code: "PROGRESS_TIME_UNKNOWN", progress: valid},
+		{name: "nonpositive-time", code: "PROGRESS_TIME_UNKNOWN", progress: valid, time: &epoch},
+		{name: "invalid-cfi", code: "INVALID_PROGRESS_CFI", progress: &grimmory.Progress{CFI: "invalid", Href: valid.Href}, time: &stamp},
+		{name: "invalid-href", code: "INVALID_PROGRESS_HREF", progress: &grimmory.Progress{Href: "OPS/Text/a.xhtml#missing"}, time: &stamp},
+		{name: "conflicting-position", code: "CONFLICTING_PROGRESS_POSITION", progress: &grimmory.Progress{CFI: "epubcfi(/6/2[ref-a]!/4/4/4/1:4)", Href: "OPS/Text/b.xhtml#three"}, time: &stamp},
+		{name: "invalid-percent", code: "INVALID_PROGRESS_PERCENT", progress: &grimmory.Progress{Href: valid.Href, Percent: number(101)}, time: &stamp},
+		{name: "other-format-progress", code: "PROGRESS_SOURCE_UNKNOWN", progress: valid, time: &stamp, pdf: json.RawMessage(`{"page":2}`)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newRig(t)
+			token := r.login(t, "alice")
+			r.m.users[1].progress, r.m.users[1].last, r.m.users[1].pdf = tc.progress, tc.time, tc.pdf
+			before := positionHash(tc.progress)
+			identity, download := r.acquire(t, token)
+			if download.Header().Get("X-Adapter-Sync-Status") != tc.code {
+				t.Fatal(download.Header())
+			}
+			response := r.request("GET", "/reader3/getShelfBook?url="+url.QueryEscape(identity), token, nil, nil)
+			assertCode(t, response, 409)
+			if !strings.Contains(response.Body.String(), tc.code) || strings.Contains(response.Body.String(), "durChapterIndex") {
+				t.Fatal("invalid history became a cloud position", response.Body.String())
+			}
+			assertCode(t, r.save(token, identity, 0), 409)
+			if len(r.m.writes) != 0 || positionHash(r.m.users[1].progress) != before || r.m.users[1].last != tc.time {
+				t.Fatal("invalid history was overwritten")
+			}
+		})
+	}
+}
+
+func TestLegacyHistoricalPauseRecovery(t *testing.T) {
+	for _, tc := range []struct {
+		name, code string
+		change     func(*store.Binding)
+		noHistory  bool
+	}{
+		{name: "untouched-history"},
+		{name: "changed-file", code: "EPUB_VERSION_CHANGED", change: func(b *store.Binding) { b.FileID++ }},
+		{name: "changed-version", code: "EPUB_VERSION_CHANGED", change: func(b *store.Binding) { b.Revision = strings.Repeat("0", 64) }},
+		{name: "position-hash", code: "HISTORICAL_PROGRESS_UNBOUND", change: func(b *store.Binding) { b.PositionHash = "previously-used" }},
+		{name: "position-time", code: "HISTORICAL_PROGRESS_UNBOUND", change: func(b *store.Binding) { b.PositionTime = 1 }},
+		{name: "successful-save", code: "HISTORICAL_PROGRESS_UNBOUND", change: func(b *store.Binding) { b.LastSuccess = 1 }},
+		{name: "reset-pause", code: "UPSTREAM_PROGRESS_RESET", change: func(b *store.Binding) { b.Code = "UPSTREAM_PROGRESS_RESET" }},
+		{name: "time-pause", code: "PROGRESS_TIME_AMBIGUOUS", change: func(b *store.Binding) { b.Code = "PROGRESS_TIME_AMBIGUOUS" }},
+		{name: "pending-write", code: "INCOMPLETE_BINDING_WRITE", change: func(b *store.Binding) { b.State = "pending" }},
+		{name: "cleared-history", code: "PROGRESS_SOURCE_UNKNOWN", noHistory: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newRig(t)
+			token := r.login(t, "alice")
+			identity, _ := r.acquire(t, token)
+			bound, _, e := r.a.DB.Binding(context.Background(), 1, 42)
+			if e != nil {
+				t.Fatal(e)
+			}
+			bound.State, bound.Code = "paused", "HISTORICAL_PROGRESS_UNBOUND"
+			if tc.change != nil {
+				tc.change(&bound)
+			}
+			if e = r.a.DB.SaveBinding(context.Background(), bound); e != nil {
+				t.Fatal(e)
+			}
+			stamp := r.m.clock
+			if !tc.noHistory {
+				r.m.users[1].progress = &grimmory.Progress{Href: "OPS/Text/a.xhtml#two", Percent: number(40)}
+				r.m.users[1].last = &stamp
+			}
+			response := r.request("GET", "/reader3/getShelfBook?url="+url.QueryEscape(identity), token, nil, nil)
+			if tc.code == "" {
+				assertReaderProgress(t, response, 1, stamp)
+			} else {
+				assertCode(t, response, 409)
+				if !strings.Contains(response.Body.String(), tc.code) {
+					t.Fatal(response.Body.String())
+				}
+				assertCode(t, r.save(token, identity, 0), 409)
+			}
+			if len(r.m.writes) != 0 {
+				t.Fatal("legacy binding recovery wrote upstream")
+			}
+		})
+	}
+}
+
+func TestVersionChangesAndResetNeverWrite(t *testing.T) {
 	t.Run("revision", func(t *testing.T) {
 		r := newRig(t)
 		token := r.login(t, "alice")

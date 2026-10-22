@@ -114,10 +114,9 @@ Choose `PUBLIC_BASE_URL` before importing books. The data directory is bound to 
 ## Sync support and limitations
 
 - **Each book must have exactly one readable file, and it must be the primary EPUB.** Books with multiple formats, such as EPUB and PDF, are currently excluded from both the OPDS catalog and progress sync.
-- **The first binding requires no existing reading progress in Grimmory.** When the source of existing progress cannot be established, the original record is preserved and automatic restore and writes are paused. Historical progress migration is not supported yet.
+- **Existing Grimmory progress is adopted automatically.** If the bridge has no binding, a valid position and reading time for the current EPUB establish one without changing the original record. Invalid positions, missing times and conflicting format progress pause sync. If a save arrives first, it is rejected until a download or Reader request loads the cloud position. Books paused only by the earlier historical-progress rule are checked again automatically, provided the file and version match and no previous sync evidence exists.
 - **Sync works at table-of-contents chapter level.** Different navigation anchors in the same XHTML file can be distinguished, but restoring the exact character position is not guaranteed. Estimated chapter progress does not mark a book as finished.
 - **The last valid write to arrive wins across devices.** Moving back to an earlier chapter is allowed, and an old device can overwrite a newer position. Rodel.Reader may save automatically when opening a book. There is currently no background queue for offline progress uploads.
-- **After replacing an EPUB, download it again.** The old copy stops writing progress, and importing the new copy may create a second entry in Rodel.Reader. Existing entries and historical progress are not migrated or deleted automatically.
 - **Sync pauses when the progress source or timestamp is unclear.** Grimmory v3.5.0 returns progress timestamps with second precision, so position changes within the same second can also cause a pause.
 
 The configuration page shows the last validation result, last successful save time, and pause reason. Refresh it manually to check for updates. A paused binding does not resume automatically, and there is currently no option to force it to resume.

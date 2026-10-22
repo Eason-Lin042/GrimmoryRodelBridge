@@ -30,6 +30,8 @@ test("static page keys and dynamic status/error keys have complete translations"
     assert.match(errorMessage("PROGRESS_TIME_AMBIGUOUS", "en"), /same-second/);
     assert.match(errorMessage("NEED_LOGIN", "en", "login"), /username or password/);
     assert.match(errorMessage("NEED_LOGIN", "zh-CN"), /会话/);
+    assert.match(errorMessage("UPSTREAM_PROGRESS_AVAILABLE", "en"), /load it before saving/);
+    assert.match(errorMessage("UPSTREAM_PROGRESS_AVAILABLE", "zh-CN"), /先读取云端位置再保存/);
     assert.equal(errorMessage("FUTURE_BACKEND_ERROR", "en"), messages.errorUnknown.en);
     assert.equal(errorMessage("FUTURE_BACKEND_ERROR", "zh-CN"), messages.errorUnknown["zh-CN"]);
 });

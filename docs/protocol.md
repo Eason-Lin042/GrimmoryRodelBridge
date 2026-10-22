@@ -46,18 +46,23 @@ CFI 支持可验证的 package/spine 路径、元素与文本步、UTF-16 字符
 ```mermaid
 stateDiagram-v2
   [*] --> new: 唯一 EPUB 且无历史位置
-  [*] --> paused: 历史来源不明
+  [*] --> bound: 唯一主 EPUB 且已有位置和时间有效
+  [*] --> paused: 位置、时间或来源冲突
+  new --> bound: 读取时发现并接纳有效历史位置
   new --> pending: 校验后提交首次保存
   bound --> pending: 校验后保存
   pending --> bound: 上游成功且读回一致
   pending --> paused: 超时、失败或读回不确定
   bound --> bound: 同版本合法 Web 位置与可信时间
   bound --> paused: 重置、冲突、版本变化或时间不明
+  paused --> bound: 仅旧版历史暂停且无同步证据、版本一致
 ```
 
-`new` 返回书籍元数据但省略全部云端进度字段，不用 0 占位；`paused` 返回明确错误。503 不变成章节零，也不授权保存端略过检查。暂停持久化，无静默重试、排队覆盖、自动迁移或强制解锁。
+`new` 返回书籍元数据但省略全部云端进度字段，不用 0 占位；`paused` 返回明确错误。503 不变成章节零，也不授权保存端略过检查。暂停持久化；唯一自动恢复例外是旧版 `HISTORICAL_PROGRESS_UNBOUND`，要求 File ID、内容版本一致，且没有位置摘要、位置时间或成功保存记录。已清空的历史不能因此重新当成新书。没有后台重试、排队覆盖或跨版本迁移。
 
-绑定粒度为用户、Book ID、File ID、源 SHA-256 与映射版本。建立后接受同版本 Web 正常更新，依赖“唯一 EPUB、仅 Web/Adapter 正常写入”的运行契约。短暂新增再删除格式、其他不可见写入路径、聚合 DTO 无法辨别的来源和操作间竞态不在保证范围。首次保存前重读上游，读回与请求字段比对仍不能形成跨服务原子性保证。
+桥接未绑定时，下载或 Reader 读取请求会校验并采用已有 EPUB 位置和真实的 `lastReadTime`，直接建立 `bound`；此过程只写本地绑定，不向 Grimmory 提交进度。没有有效位置或时间时保留原记录并暂停。如果先收到保存请求，返回 HTTP 409、`UPSTREAM_PROGRESS_AVAILABLE`，既不接纳也不覆盖该历史位置，等读取请求建立绑定后再允许保存。
+
+绑定粒度为用户、Book ID、File ID、源 SHA-256 与映射版本。首次接纳历史进度和后续 Web 更新都依赖“唯一主 EPUB、仅 Web/Adapter 正常写入”的运行契约，不要求聚合 DTO 提供不存在的来源证明；已有绑定的版本不匹配时仍拒绝自动迁移。短暂新增再删除格式、其他不可见写入路径、聚合 DTO 无法辨别的来源和操作间竞态不在保证范围。首次保存前重读上游，读回与请求字段比对仍不能形成跨服务原子性保证。
 
 `durChapterTime` 仅使用绑定下实际位置的 `lastReadTime`。同一位置仅聚合时间变化，不更新已公布的位置时间。改变位置却无新可信时间会暂停。适配器选择最后到达写入，允许回退；它不能区分小幻主动跳章与打开自动保存，不能阻止所有过期设备覆盖，也不把较高百分比认作较新位置。
 
@@ -67,7 +72,8 @@ stateDiagram-v2
 
 | 代码 | 行为与处理 |
 |---|---|
-| `HISTORICAL_PROGRESS_UNBOUND` | 原书已有位置，保留它；首版没有历史迁移入口 |
+| `HISTORICAL_PROGRESS_UNBOUND` | 旧版历史暂停；刷新 Reader 源或重新获取 EPUB，符合恢复条件时自动接纳 |
+| `UPSTREAM_PROGRESS_AVAILABLE` | 首次保存发现尚未接纳的历史进度；本次不写入，先通过下载或 Reader 读取建立绑定 |
 | `UNSUPPORTED_BOOK_FILES` / `BOOK_FILES_CHANGED` | 非唯一 EPUB 或文件集合改变，拒绝同步 |
 | `EPUB_VERSION_MISMATCH` / `EPUB_VERSION_CHANGED` | 本地版本过期，旧 URL 拒写；新版本历史进度仍需明确归属 |
 | `UPSTREAM_PROGRESS_RESET` | 已绑定位置被上游清空，暂停而非当成新书 |
