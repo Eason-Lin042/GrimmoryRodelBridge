@@ -748,6 +748,17 @@ func rewriteZIP(source, destination string, modified map[string][]byte) (err err
 			if (f.Name == "mimetype") != (pass == 0) {
 				continue
 			}
+			if f.FileInfo().IsDir() {
+				// Empty directories may still contain a nonempty compressed stream.
+				// Copy cannot write that stream to a directory; recreate its header
+				// instead, preserving metadata while normalizing it to empty Store.
+				h := f.FileHeader
+				h.CRC32 = 0
+				if _, e = w.CreateHeader(&h); e != nil {
+					return e
+				}
+				continue
+			}
 			data, changed := modified[f.Name]
 			if !changed {
 				if e = w.Copy(f); e != nil {

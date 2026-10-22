@@ -97,6 +97,104 @@ func TestNavigationCFIAndDerivedContent(t *testing.T) {
 		t.Fatal("chapter estimation marks completion")
 	}
 }
+
+func TestDerivePreservesArchivesWithDirectoryEntries(t *testing.T) {
+	for _, method := range []uint16{zip.Store, zip.Deflate} {
+		t.Run(map[uint16]string{zip.Store: "stored", zip.Deflate: "deflated"}[method], func(t *testing.T) {
+			original := testfixture.EPUB("directory-regression")
+			input, err := zip.NewReader(bytes.NewReader(original), int64(len(original)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var archive bytes.Buffer
+			writer := zip.NewWriter(&archive)
+			for _, file := range input.File {
+				if err := writer.Copy(file); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var compressed []byte
+			if method == zip.Deflate {
+				compressed = []byte{0x03, 0x00} // A valid raw DEFLATE stream for empty input.
+			}
+			// CreateRaw refuses compressed bytes for directory names. Replace a
+			// same-length temporary name in both headers after writing the archive.
+			header := &zip.FileHeader{Name: "fixture-directoryx", Method: method, CompressedSize64: uint64(len(compressed))}
+			header.SetMode(os.ModeDir | 0755)
+			entry, err := writer.CreateRaw(header)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := entry.Write(compressed); err != nil {
+				t.Fatal(err)
+			}
+			if err := writer.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if bytes.Count(archive.Bytes(), []byte("fixture-directoryx")) != 2 {
+				t.Fatal("expected local and central directory name fields")
+			}
+			raw := bytes.ReplaceAll(archive.Bytes(), []byte("fixture-directoryx"), []byte("fixture-directory/"))
+			check, err := zip.NewReader(bytes.NewReader(raw), int64(len(raw)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			directory := check.File[len(check.File)-1]
+			if !directory.FileInfo().IsDir() || directory.Method != method {
+				t.Fatal("fixture is missing its directory entry")
+			}
+			reader, err := directory.Open()
+			if err != nil {
+				t.Fatal(err)
+			}
+			data, err := io.ReadAll(reader)
+			reader.Close()
+			if err != nil || len(data) != 0 {
+				t.Fatalf("directory fixture has invalid compressed data: %v", err)
+			}
+			source := filepath.Join(t.TempDir(), "source.epub")
+			if err := os.WriteFile(source, raw, 0600); err != nil {
+				t.Fatal(err)
+			}
+			book, err := Open(source)
+			if err != nil {
+				t.Fatal(err)
+			}
+			destination := filepath.Join(t.TempDir(), "derived.epub")
+			if err := book.Derive(source, destination, "http://bridge.example/sync/test", "http://bridge.example"); err != nil {
+				t.Fatal(err)
+			}
+			output, err := Open(destination)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(output.Chapters) != len(book.Chapters) {
+				t.Fatal("directory handling changed chapter count")
+			}
+			for i, chapter := range book.Chapters {
+				got := output.Chapters[i]
+				if got.Index != chapter.Index || got.Href != chapter.Href || got.Title != chapter.Title || got.Spine != chapter.Spine || got.Position != chapter.Position {
+					t.Fatal("directory handling changed chapter mapping")
+				}
+			}
+			zipOutput, err := zip.OpenReader(destination)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer zipOutput.Close()
+			found := false
+			for _, file := range zipOutput.File {
+				if file.Name == "fixture-directory/" {
+					found = file.FileInfo().IsDir() && file.Method == zip.Store && file.CompressedSize64 == 0 && file.UncompressedSize64 == 0
+				}
+			}
+			if !found {
+				t.Fatal("derived archive lost its empty directory entry")
+			}
+		})
+	}
+}
+
 func TestNCXFallbackAndUTF16(t *testing.T) {
 	entries := testfixture.Entries("one")
 	entries["OPS/content.opf"] = strings.Replace(entries["OPS/content.opf"], ` properties="nav"`, "", 1)
